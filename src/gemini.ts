@@ -69,7 +69,8 @@ async function callWithFallback(session: Session, contents: Content[]): Promise<
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'x-goog-api-key': config.gemini.apiKey },
           body: JSON.stringify(requestBody(session, contents, model)),
-          signal: AbortSignal.timeout(remaining),
+          // Don't let one slow model eat the whole budget: leave time for a fallback.
+          signal: AbortSignal.timeout(Math.min(remaining, config.gemini.attemptTimeoutMs)),
         });
         if (res.ok) {
           if (model !== config.gemini.model) console.warn(`[gemini] answered by fallback model ${model}`);
@@ -90,6 +91,13 @@ async function callWithFallback(session: Session, contents: Content[]): Promise<
   throw lastErr ?? new Error('Gemini: no model answered in time');
 }
 
+function thinkingFor(model: string) {
+  if (model.includes('2.5')) return { thinkingBudget: 0 };
+  // 3.8 Flash and Pro-class models support low/medium/high; most other 3.x models also support minimal.
+  if (/3\.8|pro|argon/.test(model)) return { thinkingLevel: 'low' };
+  return { thinkingLevel: 'minimal' };
+}
+
 function requestBody(session: Session, contents: Content[], model: string) {
   return {
     systemInstruction: { parts: [{ text: systemInstruction(session) }] },
@@ -97,8 +105,9 @@ function requestBody(session: Session, contents: Content[], model: string) {
     generationConfig: {
       temperature: 0.4,
       maxOutputTokens: config.gemini.maxOutputTokens,
-      // Tutoring answers are short; skip "thinking" tokens to keep latency low on 2.5 models.
-      ...(model.includes('2.5') ? { thinkingConfig: { thinkingBudget: 0 } } : {}),
+      // Tutoring answers are short: keep thinking as low as each model allows, for speed
+      // (maxOutputTokens also counts thinking tokens, so heavy thinking can leave an empty answer).
+      thinkingConfig: thinkingFor(model),
     },
     safetySettings: [
       'HARM_CATEGORY_HARASSMENT',
