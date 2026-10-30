@@ -6,7 +6,10 @@ export const config = {
   port: num(process.env.PORT, 3000),
   gemini: {
     apiKey: process.env.GEMINI_API_KEY ?? '',
-    model: process.env.GEMINI_MODEL ?? 'gemini-2.5-flash',
+    model: process.env.GEMINI_MODEL ?? 'gemini-3.8-flash',
+    // Comma-separated models to try when the primary is overloaded (429/5xx).
+    fallbackModels: (process.env.GEMINI_FALLBACK_MODELS ?? 'gemini-3.5-flash-lite,gemini-3.6-flash')
+      .split(',').map((m) => m.trim()).filter(Boolean),
     rpm: num(process.env.GEMINI_RPM, 10),
     maxOutputTokens: num(process.env.GEMINI_MAX_OUTPUT_TOKENS, 400),
     timeoutMs: num(process.env.GEMINI_TIMEOUT_MS, 12000),

@@ -30,37 +30,7 @@ export async function askGemini(session: Session, history: Turn[], userText: str
   parts.push({ text: userText || (media ? 'Please help me with this.' : '') });
   contents.push({ role: 'user', parts });
 
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${config.gemini.model}:generateContent`;
-  const body = {
-    systemInstruction: { parts: [{ text: systemInstruction(session) }] },
-    contents,
-    generationConfig: {
-      temperature: 0.4,
-      maxOutputTokens: config.gemini.maxOutputTokens,
-      // Tutoring answers are short; skip "thinking" tokens to keep latency low on 2.5 models.
-      ...(config.gemini.model.includes('2.5') ? { thinkingConfig: { thinkingBudget: 0 } } : {}),
-    },
-    safetySettings: [
-      'HARM_CATEGORY_HARASSMENT',
-      'HARM_CATEGORY_HATE_SPEECH',
-      'HARM_CATEGORY_SEXUALLY_EXPLICIT',
-      'HARM_CATEGORY_DANGEROUS_CONTENT',
-    ].map((category) => ({ category, threshold: 'BLOCK_LOW_AND_ABOVE' })),
-  };
-
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'x-goog-api-key': config.gemini.apiKey },
-    body: JSON.stringify(body),
-    signal: AbortSignal.timeout(config.gemini.timeoutMs),
-  });
-  if (!res.ok) {
-    const detail = await res.text();
-    const err = new Error(`Gemini ${res.status}: ${detail.slice(0, 300)}`) as Error & { status?: number };
-    err.status = res.status;
-    throw err;
-  }
-  const data = (await res.json()) as any;
+  const data = await callWithFallback(session, contents);
   const cand = data.candidates?.[0];
   const text: string =
     cand?.content?.parts?.map((p: any) => p.text ?? '').join('').trim() ||
@@ -74,6 +44,68 @@ export async function askGemini(session: Session, history: Turn[], userText: str
     tokensIn: data.usageMetadata?.promptTokenCount,
     tokensOut: data.usageMetadata?.candidatesTokenCount,
     ms: Date.now() - started,
+  };
+}
+
+const RETRYABLE = new Set([429, 500, 502, 503, 504]);
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * Tries the primary model, then each fallback (GEMINI_FALLBACK_MODELS). A busy model (429/5xx)
+ * gets one quick retry before we move on, all inside one overall deadline so Twilio's 15 s
+ * webhook window is never exceeded.
+ */
+async function callWithFallback(session: Session, contents: Content[]): Promise<any> {
+  const models = [config.gemini.model, ...config.gemini.fallbackModels.filter((m) => m !== config.gemini.model)];
+  const deadline = Date.now() + config.gemini.timeoutMs;
+  let lastErr: (Error & { status?: number }) | undefined;
+
+  for (const model of models) {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const remaining = deadline - Date.now();
+      if (remaining < 1500) break;
+      try {
+        const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'x-goog-api-key': config.gemini.apiKey },
+          body: JSON.stringify(requestBody(session, contents, model)),
+          signal: AbortSignal.timeout(remaining),
+        });
+        if (res.ok) {
+          if (model !== config.gemini.model) console.warn(`[gemini] answered by fallback model ${model}`);
+          return await res.json();
+        }
+        const detail = await res.text();
+        lastErr = Object.assign(new Error(`Gemini ${res.status} (${model}): ${detail.slice(0, 300)}`), { status: res.status });
+        if (!RETRYABLE.has(res.status)) throw lastErr; // bad key / bad request: retrying won't help
+        console.warn(`[gemini] ${model} busy (${res.status}), ${attempt === 0 ? 'retrying' : 'trying next model'}`);
+      } catch (err) {
+        const e = err as Error & { status?: number };
+        if (e.status && !RETRYABLE.has(e.status)) throw e;
+        lastErr = e; // timeout or network error
+      }
+      if (attempt === 0) await sleep(600 + Math.random() * 600);
+    }
+  }
+  throw lastErr ?? new Error('Gemini: no model answered in time');
+}
+
+function requestBody(session: Session, contents: Content[], model: string) {
+  return {
+    systemInstruction: { parts: [{ text: systemInstruction(session) }] },
+    contents,
+    generationConfig: {
+      temperature: 0.4,
+      maxOutputTokens: config.gemini.maxOutputTokens,
+      // Tutoring answers are short; skip "thinking" tokens to keep latency low on 2.5 models.
+      ...(model.includes('2.5') ? { thinkingConfig: { thinkingBudget: 0 } } : {}),
+    },
+    safetySettings: [
+      'HARM_CATEGORY_HARASSMENT',
+      'HARM_CATEGORY_HATE_SPEECH',
+      'HARM_CATEGORY_SEXUALLY_EXPLICIT',
+      'HARM_CATEGORY_DANGEROUS_CONTENT',
+    ].map((category) => ({ category, threshold: 'BLOCK_LOW_AND_ABOVE' })),
   };
 }
 
