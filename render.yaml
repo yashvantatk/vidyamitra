@@ -1,0 +1,23 @@
+services:
+  - type: web
+    name: vidyamitra
+    runtime: node
+    plan: free
+    buildCommand: npm ci --include=dev && npm run build
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GEMINI_MODEL
+        value: gemini-2.5-flash
+      - key: GEMINI_RPM
+        value: "10"
+      - key: TWILIO_ACCOUNT_SID
+        sync: false
+      - key: TWILIO_AUTH_TOKEN
+        sync: false
+      - key: MONGODB_URI
+        sync: false
+      - key: USER_HASH_SALT
+        generateValue: true
