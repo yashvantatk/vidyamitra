@@ -12,8 +12,8 @@ export const config = {
       .split(',').map((m) => m.trim()).filter(Boolean),
     rpm: num(process.env.GEMINI_RPM, 10),
     maxOutputTokens: num(process.env.GEMINI_MAX_OUTPUT_TOKENS, 1024),
-    timeoutMs: num(process.env.GEMINI_TIMEOUT_MS, 13000),
-    attemptTimeoutMs: num(process.env.GEMINI_ATTEMPT_TIMEOUT_MS, 7000),
+    timeoutMs: num(process.env.GEMINI_TIMEOUT_MS, 25000),
+    attemptTimeoutMs: num(process.env.GEMINI_ATTEMPT_TIMEOUT_MS, 12000),
   },
   twilio: {
     accountSid: process.env.TWILIO_ACCOUNT_SID ?? '',
